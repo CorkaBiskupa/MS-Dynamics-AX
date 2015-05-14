@@ -1,0 +1,224 @@
+void change2RFQ()
+{
+    MapIterator         mi,miM;
+    container           materialGroupList,buyerList, producentList,tmpCon;
+    int                 i;
+    MaterialGroupId     matereialGrId;
+    ItemBuyerGroupId    itemBuyerGroupId;
+
+    PricingLineAs       pricingLineMark;
+    PricingLineAs       pricingLineTmp,PricingLineMatTmp,remainPricingLineMatTmp;
+    VendTable           vendTable,vendTable2,VendTableBuyer;
+    VendManufTableAs    vendManufTable;
+
+    str                 manufKey;
+
+    PricingTableAS      pricingTable;
+    Set                 vendSet;
+
+    boolean             isPricigTable = false;
+    boolean             isVendManuf   = false;
+    Map                 mapTmp  = new Map(Types::Int64,Types::Record);
+    Map                 mapM    = new Map(Types::String,Types::Class);
+    PurchRFQCaseAutoCreate_PricingAs    autoCreateRFQ;
+    //akceptacja klienta ->
+    CustAcceptationItemsRelTableAS  custAccItemRelTab;
+    CustAcceptationItemsTableAS     custAccItemTab;
+    //<- akceptacja klienta
+
+    vendSet             = new Set(Types::String);
+
+    ttsbegin;
+
+    pricingLineTmp.setTmp();
+    PricingLineMatTmp.setTmp();
+
+
+
+    mi = new MapIterator(mapPriceLineMark);
+    mi.begin();
+
+    while (mi.more())
+    {
+        pricingLineMark = mapPriceLineMark.lookup(mi.key());
+
+        manufKey = pricingLineMark.Manufacturer != "" ? pricingLineMark.Manufacturer : "noManuf";
+
+        if(mapM.exists(manufKey))
+        {
+            mapTmp = mapM.lookup(manufKey); //tmpCon;
+            mapTmp.insert(pricingLineMark.RecId,pricingLineMark);
+        }
+        else
+        {
+            mapTmp = new Map(Types::Int64, Types::Record);
+            mapTmp.insert(pricingLineMark.RecId,pricingLineMark);
+            mapM.insert(manufKey,mapTmp);
+        }
+        mi.next();
+    }
+
+    miM =  new MapIterator(mapM);
+    miM.begin();
+
+    while(miM.more())
+    {
+
+
+        mapTmp      = mapM.lookup(miM.key());   //Map::create(tmpCon);
+        mi          = new MapIterator(mapTmp);
+        mi.begin();
+
+        delete_from pricingLineTmp;
+
+        while (mi.more())
+        {
+
+            pricingLineMark = mapTmp.lookup(mi.key());
+
+            if(!isPricigTable)
+            {
+                pricingTable    = pricingLineMark.PricingTable(); // niewykorzystane - moze sie przydac
+                isPricigTable   = true;
+            }
+
+            pricingLineTmp.data(pricingLineMark);
+            pricingLineTmp.doInsert();
+
+            mi.next();
+        }
+
+        if(!addToSameRFQ
+        //potwierdzanie klienta->
+        && (!pricingTable.RecId || pricingTable.QuotationTypeAs != QuotationTypeAS::CustAcceptationAS))
+        //<-potwierdzanie klienta
+
+        {
+            materialGroupList   = connull();
+
+            if(divdeByBuyers)// && curUserId() == 'rgar')
+            {
+                while select ItemBuyerGroupId from vendTable
+                group by vendTable.ItemBuyerGroupId
+                {
+                    buyerList += vendTable.ItemBuyerGroupId;
+                }
+
+                for(i = 1; i <= conlen(buyerList); i++)
+                {
+                // buyer - glowna petla
+                    itemBuyerGroupId    = conpeek(buyerList,i);
+
+
+                    while select    pricingLineTmp
+                    {
+                    //petla wierszy wyceny
+
+                        While select vendManufTable
+                        where   (pricingLineTmp.Manufacturer && vendManufTable.Manufacturer == pricingLineTmp.Manufacturer)
+                            && vendManufTable.RFQInclude    == true
+                        join    vendTable
+                        where   vendTable.AccountNum == vendManufTable.VendAccount
+                        {
+                        // petla dostawcy producenta
+                            if(vendTable.ItemBuyerGroupId   == itemBuyerGroupId)
+                            {
+                                isVendManuf = true;
+                                vendSet.add(vendTable.AccountNum);
+                            }
+                        }
+
+                        if(itemBuyerGroupId == 'Oferta' && this.isRFQForOfferBuyerGr(pricingLineTmp,isVendManuf))
+                        {
+                            isVendManuf = true;
+                            vendSet.add(vendTable.AccountNum);
+                        }
+
+                        if((!vendSet.empty() || itemBuyerGroupId == 'Oferta') && isVendManuf == true)
+                        {
+                            PricingLineMatTmp.data(pricingLineTmp);
+                            PricingLineMatTmp.VendAccount   = vendManufTable.VendAccount;
+                            PricingLineMatTmp.doInsert();
+                            isVendManuf = false;
+                        }
+                    }
+
+                    select firstonly recId from PricingLineMatTmp;
+
+                    if(PricingLineMatTmp.recId && !vendSet.empty())
+                    {
+                        autoCreateRFQ   = PurchRFQCaseAutoCreate_PricingAs::construct();
+                        autoCreateRFQ.parmBuffer(PricingLineMatTmp);
+                        autoCreateRFQ.parmItemBuyerGroupId(itemBuyerGroupId);
+                        autoCreateRFQ.parmVendSet(vendSet);
+                        autoCreateRFQ.parmCopyData2RFQ(CopyData2RFQ);
+                        autoCreateRFQ.parmConsidetCompanyStock(considetCompanyStock);
+                        autoCreateRFQ.create();
+                    }
+                    delete_From PricingLineMatTmp;
+                }
+            }
+            else
+            {
+                while select DEL_materialGroupId from pricingLineTmp
+                group by pricingLineTmp.DEL_MaterialGroupId
+                {
+                    materialGroupList += pricingLineTmp.DEL_MaterialGroupId;
+                }
+
+                for(i = 1; i <= conlen(materialGroupList); i++)
+                {
+                    matereialGrId   = conpeek(materialGroupList,i);
+
+                    while select    pricingLineTmp
+                        where   pricingLineTmp.DEL_MaterialGroupId == matereialGrId
+                    {
+                        PricingLineMatTmp.data(pricingLineTmp);
+                        PricingLineMatTmp.doInsert();
+                    }
+
+                    autoCreateRFQ   = PurchRFQCaseAutoCreate_PricingAs::construct();
+                    autoCreateRFQ.parmBuffer(PricingLineMatTmp);
+                    autoCreateRFQ.parmCopyData2RFQ(CopyData2RFQ);
+                    autoCreateRFQ.parmConsidetCompanyStock(considetCompanyStock);
+                    autoCreateRFQ.create();
+
+                    delete_From PricingLineMatTmp;
+                }
+            }
+        }
+        else
+        {
+            //->ak
+            if(pricingTable.QuotationTypeAs != QuotationTypeAS::CustAcceptationAS)
+            {
+            //<ak
+                While select vendManufTable
+                where   (pricingLineTmp.Manufacturer && vendManufTable.Manufacturer == pricingLineTmp.Manufacturer)
+                    && vendManufTable.RFQInclude    == true
+                join    vendTable
+                where   vendTable.AccountNum == vendManufTable.VendAccount
+                {
+                    isVendManuf = true;
+                    vendSet.add(vendTable.AccountNum);
+                }
+            }
+            //->ak
+            else
+            {
+                vendSet.add(pricingTable.CustAccount);
+            }
+            //<-ak
+            autoCreateRFQ   = PurchRFQCaseAutoCreate_PricingAs::construct();
+            autoCreateRFQ.parmBuffer(PricingLineTmp);
+            autoCreateRFQ.parmVendSet(vendSet);
+            autoCreateRFQ.parmCopyData2RFQ(CopyData2RFQ);
+            autoCreateRFQ.parmConsidetCompanyStock(considetCompanyStock);
+            autoCreateRFQ.create();
+        }
+
+        miM.next();
+    }
+    ttscommit;
+
+}
